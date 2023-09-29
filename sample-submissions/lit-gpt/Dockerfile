@@ -17,11 +17,18 @@ RUN apt-get update && apt-get install -y git
 # Install any needed packages specified in requirements.txt that come from lit-gpt plus some optionals
 RUN pip install -r requirements.txt huggingface_hub sentencepiece tokenizers bitsandbytes scipy
 
+ARG HF_TOKEN=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
 # some huggingface_hub versions require that the target dir exists
-RUN mkdir -p checkpoints/openlm-research/open_llama_3b
-# get open-llama weights: https://github.com/Lightning-AI/lit-gpt/blob/main/tutorials/download_openllama.md
-RUN python scripts/download.py --repo_id openlm-research/open_llama_3b
-RUN python scripts/convert_hf_checkpoint.py --checkpoint_dir checkpoints/openlm-research/open_llama_3b
+RUN mkdir -p checkpoints/meta-llama/Llama-2-7b-hf
+RUN python scripts/download.py --repo_id meta-llama/Llama-2-7b-hf --access_token $HF_TOKEN
+RUN python scripts/convert_hf_checkpoint.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --dtype bfloat16
+
+# Merge the weights
+RUN apt-get install -y wget
+RUN mkdir -p out/lora/all
+RUN wget -O out/lora/all/lit_model_lora_finetuned.pth https://github.com/DJayalath/neurips_llm_efficiency_challenge/releases/download/v0.3/lit_model_lora_finetuned.pth
+RUN mkdir -p out/lora_merged/all
+RUN python scripts/merge_lora.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --lora_path out/lora/all/lit_model_lora_finetuned.pth --out_dir out/lora_merged/all
 
 # Copy over single file server
 COPY ./main.py /submission/main.py

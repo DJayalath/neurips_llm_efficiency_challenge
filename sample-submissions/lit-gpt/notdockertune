@@ -1,0 +1,59 @@
+# FINE-TUNING DOCKERFILE
+
+# Use an official Python runtime as a parent image
+# other options in https://github.com/orgs/pytorch/packages/container/pytorch-nightly/versions?filters%5Bversion_type%5D=tagged
+# Lit-GPT requires current nightly (future 2.1) for the latest attention changes
+FROM ghcr.io/pytorch/pytorch-nightly:c69b6e5-cu11.8.0
+
+# Set the working directory in the container to /submission
+WORKDIR /submission
+
+# Copy the specific file into the container at /submission
+COPY /lit-gpt/ /submission/
+
+# Setup server requriements
+COPY ./fast_api_requirements.txt fast_api_requirements.txt
+RUN pip install --no-cache-dir --upgrade -r fast_api_requirements.txt
+
+RUN apt-get update && apt-get install -y git
+# Install any needed packages specified in requirements.txt that come from lit-gpt plus some optionals
+RUN pip install -r requirements.txt huggingface_hub sentencepiece tokenizers bitsandbytes scipy datasets
+RUN pip install git+https://github.com/google/BIG-bench.git
+
+ARG HF_TOKEN=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
+# some huggingface_hub versions require that the target dir exists
+RUN mkdir -p checkpoints/meta-llama/Llama-2-7b-hf
+RUN python scripts/download.py --repo_id meta-llama/Llama-2-7b-hf --access_token $HF_TOKEN
+RUN python scripts/convert_hf_checkpoint.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --dtype bfloat16
+
+# Prepare datasets
+RUN python scripts/prepare_dolly.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true
+RUN python scripts/prepare_alpaca.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true
+RUN python scripts/prepare_cnn.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_gsm8k.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_lima.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_mmlu.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+# RUN python scripts/prepare_truthfulQA.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_commonsense_qa.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_openbookqa.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_bigbench.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_ai2_arc.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+RUN python scripts/prepare_sciq.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --mask_inputs true --access_token $HF_TOKEN
+
+# Merge datasets into a single dataset
+RUN python scripts/merge_datasets.py --datasets cnn gsm8k lima commonsense_qa openbookqa mmlu dolly alpaca bigbench
+
+# Fine-tune the model
+RUN mkdir -p out/lora/all
+RUN python finetune/lora.py --precision "bf16-true" --quantize "bnb.nf4-dq" --data_dir data/all --out_dir out/lora/all --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf
+
+# Merge the weights
+RUN mkdir -p out/lora_merged/all
+RUN python scripts/merge_lora.py --checkpoint_dir checkpoints/meta-llama/Llama-2-7b-hf --lora_path out/lora/all/lit_model_lora_finetuned.pth --out_dir out/lora_merged/all
+
+# Copy over single file server
+COPY ./main.py /submission/main.py
+COPY ./helper.py /submission/helper.py
+COPY ./api.py /submission/api.py
+# Run the server
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]

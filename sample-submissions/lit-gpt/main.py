@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 quantize = "bnb.nf4-dq"  # 4-bit NormalFloat with Double-Quantization (see QLoRA paper)
-checkpoint_dir = Path("checkpoints/openlm-research/open_llama_3b")
+# checkpoint_dir = Path("checkpoints/openlm-research/open_llama_3b")
+checkpoint_dir = Path("checkpoints/meta-llama/Llama-2-7b-hf")
+model_dir = Path("out/lora_merged/all")
 precision = "bf16-true"  # weights and data in bfloat16 precision
 
 fabric = L.Fabric(devices=1, accelerator="cuda", precision=precision)
@@ -47,8 +49,8 @@ fabric = L.Fabric(devices=1, accelerator="cuda", precision=precision)
 with open(checkpoint_dir / "lit_config.json") as fp:
     config = Config(**json.load(fp))
 
-checkpoint_path = checkpoint_dir / "lit_model.pth"
-logger.info(f"Loading model {str(checkpoint_path)!r} with {config.__dict__}")
+checkpoint_path = model_dir / "lit_model.pth"
+logger.info(f"Loading model {str(model_dir)!r} with {config.__dict__}")
 with fabric.init_module(empty_init=True), quantization(quantize):
     model = GPT(config)
 
